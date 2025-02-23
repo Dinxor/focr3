@@ -34,23 +34,23 @@ class NeuralNetMLP(object):
 
 def get_symb(img, x0, x1, y0, y1):
     letter_crop = img[y0:y1, x0:x1]
-    w = x1-x0
-    h = y1-y0
+    w = x1 - x0
+    h = y1 - y0
     if w < 5 or h < 5:
         return ''
     size_max = max(w, h)
     letter_square = 255 * np.ones(shape=[size_max, size_max], dtype=np.uint8)
     if w > h:
-        y_pos = size_max//2 - h//2
+        y_pos = size_max // 2 - h // 2
         letter_square[y_pos:y_pos + h, 0:w] = letter_crop
     elif w < h:
-        x_pos = size_max//2 - w//2
+        x_pos = size_max // 2 - w // 2
         letter_square[0:h, x_pos:x_pos + w] = letter_crop
     else:
         letter_square = letter_crop
-    letter = (x, w, cv.resize(letter_square, (28, 28), interpolation=cv.INTER_AREA))
-    im2arr = cv.bitwise_not(letter[2])
-    im2arr = np.reshape(im2arr,(1,784))
+    resized_letter = cv.resize(letter_square, (28, 28), interpolation=cv.INTER_AREA)
+    im2arr = cv.bitwise_not(resized_letter)
+    im2arr = np.reshape(im2arr, (1, 784))
     symb = nn.predict(im2arr)
     return symb
 
@@ -61,12 +61,12 @@ def restore_lines(distorted):
         a, b, c = lines.shape
         for i in range(a):
             cv.line(distorted, (lines[i][0][0], lines[i][0][1]), (lines[i][0][2],  lines[i][0][3]), (255), 3, cv.LINE_AA)
-    return distorted 
+    return distorted
 
 def get_mask(img):
     height, width,_ = img.shape
     stop = set()
-    img1 = img&224
+    img1 = img & 224
     for i in range(width):
         stop.add(tuple(img1[0,i]))
         stop.add(tuple(img1[height-1,i]))
@@ -77,23 +77,38 @@ def get_mask(img):
             color = tuple(img1[j,i])
             if not color in stop:
                 vis[j,i] = 255
-    kernel = np.ones((3,3),np.uint8)
-    mask = cv.dilate(vis,kernel,iterations = 1)
+    kernel = np.ones((3, 3), np.uint8)
+    mask = cv.dilate(vis, kernel, iterations=1)
     return ~mask
 
+def find_symbol_borders(contour):
+    x, y, w, h = cv.boundingRect(contour)
+    return x, y, x + w, y + h
+
+def extract_symbols_from_image(image, parts):
+    symbols = []
+    contours, _ = cv.findContours(image, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
+    for contour in contours:
+        if cv.contourArea(contour) > 50:  # filter out too small contours
+            x0, y0, x1, y1 = find_symbol_borders(contour)
+            if x1 > x0 and y1 > y0:
+                symbols.append((x0, y0, x1, y1))
+    return symbols
+
 if __name__ == '__main__':
-    if len (sys.argv) > 1 :
+    if len(sys.argv) > 1:
         in_file = sys.argv[1]
     else:
-        if os.path.exists('turbobit_net_v50_GDL_03.png'):
-            in_file = 'turbobit_net_v50_GDL_03.png'
+        if os.path.exists('ozo sos zoz.png'):
+            in_file = 'ozo sos zoz.png'
         else:
             sys.exit()
-    if len (sys.argv) > 2 :
+    
+    if len(sys.argv) > 2:
         out_name = sys.argv[2]
     else:
         out_name = ''
-
+    
     path = "focr.ini"
     changes = []
     koefs = []
@@ -123,8 +138,8 @@ if __name__ == '__main__':
     rez = ''
     img = cv.imread(in_file)
     dim = (300,100)
-    resized = cv.resize(img, dim, interpolation = cv.INTER_AREA)
-    blur = cv.blur(resized,(3,3))
+    resized = cv.resize(img, dim, interpolation=cv.INTER_AREA)
+    blur = cv.blur(resized, (3, 3))
     gray = cv.cvtColor(blur, cv.COLOR_BGR2GRAY)
     img0 = gray.copy()
     thresh = cv.inRange(img0, 170, 246)
@@ -132,68 +147,24 @@ if __name__ == '__main__':
     cv.line(thresh, (0, 96), (300, 96), (255), 10)
     imask = get_mask(resized)
     thresh = cv.bitwise_or(thresh, imask)
-    contours, hierarchy = cv.findContours(thresh, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
+    contours, _ = cv.findContours(thresh, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
     img1 = img0.copy()
     img1.fill(255)
     cv.fillPoly(img1, contours, 0)
     mask = cv.bitwise_not(img1)
-    rects = []
     nn = NeuralNetMLP()
-    for idx, contour in enumerate(contours):
-        (x, y, w, h) = cv.boundingRect(contour)
-        if hierarchy[0][idx][3] == 0 and w > 5 and h > 10:
-            cv.rectangle(thresh, (x, y), (x + w, y + h), (120, 0, 0), 1)
-            rects.append([x, y, w, h])
-    if len(rects) == 4:
-        for x, y, w, h in sorted(rects, key=operator.itemgetter(0)):
-            cv.rectangle(thresh, (x, y), (x + w, y + h), (10, 0, 0), 1)
-            symb = get_symb(mask, x, x+w, y,y+h)
-            rez += symb
-    else:
-        blur = cv.blur(resized,(5,5))#cv.GaussianBlur(resized,(5,5),0)#
-        gray = cv.cvtColor(blur, cv.COLOR_BGR2GRAY)
-        thresh = cv.inRange(img0, 170, 246)#cv.threshold(img0,150,255,cv.THRESH_BINARY+cv.THRESH_OTSU)#
-        thresh = cv.bitwise_or(thresh, imask)
-        thresh = restore_lines(thresh)
-        cv.line(thresh, (0, 4), (300, 4), (255), 10)
-        cv.line(thresh, (0, 96), (300, 96), (255), 10)
-        for i, slick in enumerate(parts):
-            edge0, edge1 = slick
-            img0 = thresh[0:100, 2*edge0:2*edge1]
-            img1 = img0.copy()
-            cv.line(img1, (0, 0), (0, 100), (255), 4)
-            cv.line(img1, (2*(edge1-edge0-1), 0), (2*(edge1-edge0-1), 100), (255), 2)
-            contours, hierarchy = cv.findContours(img1, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
-            if len(contours) == 0:
-                continue
-            img1.fill(255)
-            cv.fillPoly(img1, contours, 0)
-            mask = cv.bitwise_not(img1)
-            x0, y0 = 255,255
-            x1, y1 = 0, 0
-            cnts = []
-            for idx, contour in enumerate(contours):
-                (x, y, w, h) = cv.boundingRect(contour)
-                if hierarchy[0][idx][3] == 0 and w > 7 and h > 7:
-                            cnts.append([x, y, w, h, w*h])
-            for cn in sorted(cnts, key=operator.itemgetter(4), reverse = True):
-                (x, y, w, h, _) = cn
-                if x1 == 0 or x-x1 < 6:
-                    if x < x0:
-                        x0 = x
-                    if x+w > x1:
-                        x1 = x+w
-                if y1 == 0 or y-y1 < 4:
-                    if y < y0:
-                        y0 = y
-                    if y+h > y1:
-                        y1 = y+h
-            cv.rectangle(img0, (x0, y0), (x1, y1), (10, 0, 0), 1)
-            symb = get_symb(mask, x0, x1, y0,y1)
-            rez += symb
+
+    # Extract symbols from contours
+    symbols = extract_symbols_from_image(mask, parts)
+    symbols.sort(key=lambda x: x[0])  # Sort by x-coordinate to read from left to right
+    for x0, y0, x1, y1 in symbols:
+        symb = get_symb(mask, x0, x1, y0, y1)
+        rez += symb
+
     if save_parts > 0:
         basename = str(int(time.time()))
         thresh.save(save_dir + basename + '_' + rez + '_.bmp')
+
     if mode == 'file':
         fout = open(out_name, 'w')
         fout.write(rez)
